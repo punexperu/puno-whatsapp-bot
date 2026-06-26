@@ -4,12 +4,12 @@ const QRCode = require('qrcode');
 const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 
-// Global error handlers - bot stays alive on any crash
+// Global error handlers
 process.on('uncaughtException', err => {
-  console.error('WARN uncaughtException (bot sigue activo):', err.message);
+  console.error('WARN uncaughtException:', err.message);
 });
 process.on('unhandledRejection', reason => {
-  console.error('WARN unhandledRejection (bot sigue activo):', reason);
+  console.error('WARN unhandledRejection:', reason);
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -44,8 +44,8 @@ REGLAS:
 
 const historial = {};
 let currentQR = null;
+let botReady = false;
 
-// HTTP server to serve scannable QR from any browser
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
   if (req.url === '/qr') {
@@ -63,6 +63,9 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(500);
         res.end('Error generando QR: ' + e.message);
       }
+    } else if (botReady) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!DOCTYPE html><html><head><meta charset="utf-8"><title>PUNO</title><style>body{background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:sans-serif;color:#0f0;text-align:center}</style></head><body><div><h2>PUNO ACTIVO</h2><p>El bot esta conectado y respondiendo mensajes.</p></div></body></html>');
     } else {
       const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>PUNO</title>'
         + '<style>body{background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:sans-serif;color:#fff;text-align:center}</style></head>'
@@ -77,7 +80,6 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(PORT, () => console.log('Servidor QR activo en puerto ' + PORT));
 
-// WhatsApp client
 const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH || '/root/.nix-profile/bin/chromium';
 console.log('Chromium path:', chromiumPath);
 
@@ -86,9 +88,14 @@ const client = new Client({
   puppeteer: {
     executablePath: chromiumPath,
     args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
-      '--single-process', '--disable-gpu', '--disable-extensions'
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-extensions'
     ],
     headless: true
   }
@@ -96,36 +103,37 @@ const client = new Client({
 
 client.on('qr', qr => {
   currentQR = qr;
+  botReady = false;
   console.log('QR generado - abre /qr en el navegador para escanearlo');
   qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
   currentQR = null;
+  botReady = true;
   console.log('PUNO activo y escuchando en WhatsApp');
 });
 
 client.on('disconnected', reason => {
   currentQR = null;
+  botReady = false;
   console.log('WhatsApp desconectado:', reason);
 });
 
-// Message handler
-client.on('message', async msg => {
+async function procesarMensaje(msg) {
+  console.log('>>> EVENTO from:', msg.from, '| fromMe:', msg.fromMe, '| body:', msg.body ? msg.body.substring(0, 50) : '(vacio)');
   if (msg.from === 'status@broadcast') return;
   if (msg.fromMe) return;
-  if (msg.isGroupMsg) return;
+  if (msg.from.endsWith('@g.us')) return;
   if (!msg.body || !msg.body.trim()) return;
 
   const sender = msg.from;
   const texto = msg.body.trim();
-  console.log('Mensaje de ' + sender + ': ' + texto.substring(0, 80));
+  console.log('Procesando de ' + sender + ': ' + texto.substring(0, 80));
 
   if (!historial[sender]) historial[sender] = [];
   historial[sender].push({ role: 'user', content: texto });
-  if (historial[sender].length > 10) {
-    historial[sender] = historial[sender].slice(-10);
-  }
+  if (historial[sender].length > 10) historial[sender] = historial[sender].slice(-10);
 
   try {
     const response = await anthropic.messages.create({
@@ -137,10 +145,13 @@ client.on('message', async msg => {
     const respuesta = response.content[0].text.trim();
     historial[sender].push({ role: 'assistant', content: respuesta });
     await msg.reply(respuesta);
-    console.log('Respuesta enviada a ' + sender);
+    console.log('Respuesta enviada a ' + sender + ': ' + respuesta.substring(0, 60));
   } catch (err) {
     console.error('Error al responder a ' + sender + ':', err.message);
   }
-});
+}
+
+client.on('message', procesarMensaje);
+client.on('message_create', procesarMensaje);
 
 client.initialize();
