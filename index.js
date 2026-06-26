@@ -37,9 +37,16 @@ REGLAS:
 const historial = {};
 const esNuevoUsuario = {};
 
+// Detectar executable de Chromium para Railway/Linux
+const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH
+  || '/root/.nix-profile/bin/chromium'
+  || '/usr/bin/chromium-browser'
+  || '/usr/bin/chromium';
+
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
+    executablePath: chromiumPath,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -48,7 +55,9 @@ const client = new Client({
       '--no-first-run',
       '--no-zygote',
       '--single-process',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking'
     ],
     headless: true
   }
@@ -120,4 +129,5 @@ client.on('message', async msg => {
   }
 });
 
+console.log('🚀 Iniciando PUNO... Chromium en:', chromiumPath);
 client.initialize();
