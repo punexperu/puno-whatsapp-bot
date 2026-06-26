@@ -4,6 +4,14 @@ const QRCode = require('qrcode');
 const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 
+// ── Manejo global de errores para evitar crashes ──────────────────────────────
+process.on('uncaughtException', err => {
+  console.error('⚠️  Error no controlado (bot sigue activo):', err.message);
+});
+process.on('unhandledRejection', reason => {
+  console.error('⚠️  Promesa rechazada (bot sigue activo):', reason);
+});
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const SYSTEM_PROMPT = `Eres PUNO, asistente de PUNEX GROUP S.A.C., empresa de Lima, Perú.
@@ -31,68 +39,66 @@ FLUJO PARA EXPORTADORES/PROVEEDORES (quien tiene producto peruano para vender):
 
 REGLAS:
 - Nunca inventes precios ni prometas nada específico
-- Si preguntan precio: "Depende del volumen y condiciones — eso lo define Martín con propuesta formal"
-- Responde en español por defecto. Si el usuario escribe en inglés, responde en inglés
-- Solo responde el mensaje, sin meta-comentarios ni explicaciones extra
-- Si no entiendes el mensaje, pide que aclaren con naturalidad`;
+- Si preguntan precio: "Depende del volumen y condiciones — eso lo define Martín con propuesta formal."
+- Responde en español por defecto. Si el usuario escribe en inglés, responde en inglés.
+- Solo responde el mensaje, sin meta-comentarios ni explicaciones extra`;
 
 const historial = {};
-const esNuevoUsuario = {};
 let currentQR = null;
 
-// Servidor HTTP para mostrar el QR como imagen escaneable
+// ── Servidor HTTP para mostrar el QR escaneable ───────────────────────────────
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
   if (req.url === '/qr') {
     if (currentQR) {
       try {
         const qrDataURL = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="refresh" content="30">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PUNO - Escanea el QR</title>
   <style>
-    body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
-    img { max-width: 300px; border: 10px solid white; border-radius: 8px; }
-    h2 { color: #128C7E; }
-    p { color: #555; }
+    body { font-family: sans-serif; text-align: center; padding: 40px; background: #f0f0f0; }
+    h1 { color: #25D366; }
+    img { border: 8px solid white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
+    p { color: #666; }
   </style>
-  <meta http-equiv="refresh" content="30">
 </head>
 <body>
-  <h2>📱 PUNO WhatsApp Bot</h2>
-  <p>Escanea este QR con WhatsApp Business → Dispositivos vinculados → Vincular dispositivo</p>
-  <img src="${qrDataURL}" alt="QR Code">
-  <p><small>Esta página se actualiza automáticamente cada 30 segundos</small></p>
+  <h1>PUNO Bot - WhatsApp</h1>
+  <p>Escanea este código con WhatsApp Business → Dispositivos vinculados</p>
+  <img src="${qrDataURL}" alt="QR Code" width="300" height="300">
+  <p><small>Se actualiza cada 30 segundos</small></p>
 </body>
 </html>`);
-      } catch (err) {
-        res.writeHead(500);
-        res.end('Error generando QR: ' + err.message);
+      } catch (e) {
+        res.writeHead(500); res.end('Error generando QR');
       }
     } else {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="refresh" content="5">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PUNO - Cargando...</title>
-  <meta http-equiv="refresh" content="5">
-  <style>body { font-family: sans-serif; text-align: center; padding: 40px; }</style>
+  <style>body { font-family: sans-serif; text-align: center; padding: 60px; } h1 { color: #25D366; }</style>
 </head>
 <body>
-  <h2>⏳ PUNO está iniciando...</h2>
-  <p>El QR aparecerá aquí en unos segundos. Esta página se actualiza sola.</p>
+  <h1>PUNO Bot</h1>
+  <p>⏳ Bot iniciando o ya conectado. Si ya escaneaste el QR, ¡ya está listo!</p>
+  <p><small>Esta página se recarga sola cada 5 segundos</small></p>
 </body>
 </html>`);
     }
   } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>PUNO Bot activo ✅</h1><p><a href="/qr">Ver QR de WhatsApp</a></p>');
+    res.writeHead(302, { Location: '/qr' });
+    res.end();
   }
 });
 
@@ -100,9 +106,10 @@ server.listen(PORT, () => {
   console.log(`\n🌐 Servidor QR en puerto ${PORT} — visita /qr para escanear\n`);
 });
 
-// Chromium para Railway
-const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH
-  || '/root/.nix-profile/bin/chromium';
+// ── Cliente WhatsApp ──────────────────────────────────────────────────────────
+const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH || '/root/.nix-profile/bin/chromium';
+
+console.log('\n🚀 Iniciando PUNO...\n');
 
 const client = new Client({
   authStrategy: new LocalAuth(),
@@ -134,38 +141,31 @@ client.on('ready', () => {
   console.log('\n✅ PUNO está activo y escuchando en WhatsApp\n');
 });
 
-client.on('auth_failure', msg => {
-  console.error('❌ Autenticación fallida:', msg);
-});
-
 client.on('disconnected', reason => {
   console.log('⚠️  WhatsApp desconectado:', reason);
+  currentQR = null;
 });
 
+// ── Manejador de mensajes ─────────────────────────────────────────────────────
 client.on('message', async msg => {
+  // Ignorar: estados de WhatsApp, mensajes propios, grupos, sin texto
+  if (msg.from === 'status@broadcast') return;
   if (msg.fromMe) return;
-  if (msg.from.endsWith('@g.us')) return;
-  const texto = msg.body ? msg.body.trim() : '';
-  if (!texto) return;
+  if (msg.isGroupMsg) return;
+  if (!msg.body || !msg.body.trim()) return;
 
   const sender = msg.from;
-  console.log(`\n📩 [${sender}]: ${texto}`);
+  const texto = msg.body.trim();
 
-  if (!historial[sender]) {
-    historial[sender] = [];
-    esNuevoUsuario[sender] = true;
-  }
+  console.log(`\n📩 [${sender}]: ${texto}\n`);
 
-  if (esNuevoUsuario[sender]) {
-    esNuevoUsuario[sender] = false;
-    const bienvenida = '¡Hola! Soy PUNO, asistente de PUNEX GROUP. Conectamos compradores internacionales con proveedores peruanos. ¿Busca importar producto peruano o quiere conectar con compradores para exportar?';
-    await msg.reply(bienvenida);
-    historial[sender].push({ role: 'assistant', content: bienvenida });
-    return;
-  }
-
+  if (!historial[sender]) historial[sender] = [];
   historial[sender].push({ role: 'user', content: texto });
-  if (historial[sender].length > 20) historial[sender] = historial[sender].slice(-20);
+
+  // Mantener máximo 10 mensajes por conversación
+  if (historial[sender].length > 10) {
+    historial[sender] = historial[sender].slice(-10);
+  }
 
   try {
     const response = await anthropic.messages.create({
@@ -174,15 +174,17 @@ client.on('message', async msg => {
       system: SYSTEM_PROMPT,
       messages: historial[sender]
     });
+
     const respuesta = response.content[0].text.trim();
     historial[sender].push({ role: 'assistant', content: respuesta });
+
     await msg.reply(respuesta);
-    console.log(`✅ Respuesta enviada a ${sender}`);
+    console.log(`✅ Respuesta: ${respuesta.substring(0, 80)}...\n`);
+
   } catch (err) {
-    console.error('❌ Error API:', err.message);
-    try { await msg.reply('Hubo un problema técnico. Intenta de nuevo.'); } catch (_) {}
+    console.error('❌ Error al responder:', err.message);
+    // No re-lanzamos el error para que el bot siga activo
   }
 });
 
-console.log('🚀 Iniciando PUNO...');
 client.initialize();
