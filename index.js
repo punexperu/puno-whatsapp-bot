@@ -1,8 +1,9 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const QRCode = require('qrcode');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
+const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
+const pino = require('pino');
 
 process.on('uncaughtException', err => {
   console.error('WARN uncaughtException:', err.message);
@@ -79,79 +80,96 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(PORT, () => console.log('Servidor QR activo en puerto ' + PORT));
 
-const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH || '/root/.nix-profile/bin/chromium';
-console.log('Chromium path:', chromiumPath);
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  const { version } = await fetchLatestBaileysVersion();
+  console.log('Usando Baileys WA version:', version.join('.'));
 
-const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    executablePath: chromiumPath,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-extensions'
-    ],
-    headless: true
-  }
-});
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    logger: pino({ level: 'silent' }),
+    browser: ['PUNO Bot', 'Chrome', '1.0.0'],
+    generateHighQualityLinkPreview: false,
+    getMessage: async () => undefined
+  });
 
-client.on('qr', qr => {
-  currentQR = qr;
-  botReady = false;
-  console.log('QR generado - abre /qr en el navegador para escanearlo');
-  qrcode.generate(qr, { small: true });
-});
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
 
-client.on('ready', () => {
-  currentQR = null;
-  botReady = true;
-  console.log('PUNO activo y escuchando en WhatsApp');
-});
+    if (qr) {
+      currentQR = qr;
+      botReady = false;
+      console.log('QR generado - abre /qr en el navegador para escanearlo');
+      qrcode.generate(qr, { small: true });
+    }
 
-client.on('disconnected', reason => {
-  currentQR = null;
-  botReady = false;
-  console.log('WhatsApp desconectado:', reason);
-});
+    if (connection === 'open') {
+      currentQR = null;
+      botReady = true;
+      console.log('PUNO activo y conectado a WhatsApp');
+    }
 
-// TEST MODE: fromMe filter removed temporarily
-async function procesarMensaje(msg) {
-  console.log('>>> EVENTO from:', msg.from, '| fromMe:', msg.fromMe, '| body:', msg.body ? msg.body.substring(0, 50) : '(vacio)');
-  if (msg.from === 'status@broadcast') return;
-  // fromMe filter removed for testing - put back after test
-  if (msg.from.endsWith('@g.us')) return;
-  if (!msg.body || !msg.body.trim()) return;
+    if (connection === 'close') {
+      botReady = false;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      console.log('Conexion cerrada, codigo:', statusCode, '| Reconectando:', shouldReconnect);
+      if (shouldReconnect) {
+        setTimeout(() => connectToWhatsApp(), 5000);
+      } else {
+        currentQR = null;
+        console.log('Sesion cerrada. Reinicia para nuevo QR.');
+      }
+    }
+  });
 
-  const sender = msg.from;
-  const texto = msg.body.trim();
-  console.log('Procesando de ' + sender + ': ' + texto.substring(0, 80));
+  sock.ev.on('creds.update', saveCreds);
 
-  if (!historial[sender]) historial[sender] = [];
-  historial[sender].push({ role: 'user', content: texto });
-  if (historial[sender].length > 10) historial[sender] = historial[sender].slice(-10);
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
 
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 350,
-      system: SYSTEM_PROMPT,
-      messages: historial[sender]
-    });
-    const respuesta = response.content[0].text.trim();
-    historial[sender].push({ role: 'assistant', content: respuesta });
-    await msg.reply(respuesta);
-    console.log('Respuesta enviada a ' + sender + ': ' + respuesta.substring(0, 60));
-  } catch (err) {
-    console.error('Error al responder a ' + sender + ':', err.message);
-  }
+    for (const msg of messages) {
+      const jid = msg.key.remoteJid || '';
+      const fromMe = msg.key.fromMe;
+      const body = msg.message?.conversation
+        || msg.message?.extendedTextMessage?.text
+        || msg.message?.imageMessage?.caption
+        || '';
+
+      console.log('>>> EVENTO from:', jid, '| fromMe:', fromMe, '| body:', body.substring(0, 50));
+
+      if (jid === 'status@broadcast') continue;
+      if (jid.endsWith('@g.us')) continue;
+      if (fromMe) continue;
+      if (!body.trim()) continue;
+
+      const sender = jid;
+      const texto = body.trim();
+      console.log('Procesando de ' + sender + ': ' + texto.substring(0, 80));
+
+      if (!historial[sender]) historial[sender] = [];
+      historial[sender].push({ role: 'user', content: texto });
+      if (historial[sender].length > 10) historial[sender] = historial[sender].slice(-10);
+
+      try {
+        const response = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 350,
+          system: SYSTEM_PROMPT,
+          messages: historial[sender]
+        });
+        const respuesta = response.content[0].text.trim();
+        historial[sender].push({ role: 'assistant', content: respuesta });
+
+        await sock.sendMessage(sender, { text: respuesta });
+        console.log('Respuesta enviada a ' + sender + ': ' + respuesta.substring(0, 60));
+      } catch (err) {
+        console.error('Error al responder a ' + sender + ':', err.message);
+      }
+    }
+  });
 }
 
-// Only message_create to catch self-sent messages for testing
-client.on('message_create', procesarMensaje);
-
-client.initialize();
+connectToWhatsApp();
