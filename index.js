@@ -4,7 +4,6 @@ const QRCode = require('qrcode');
 const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 
-// Global error handlers
 process.on('uncaughtException', err => {
   console.error('WARN uncaughtException:', err.message);
 });
@@ -120,10 +119,11 @@ client.on('disconnected', reason => {
   console.log('WhatsApp desconectado:', reason);
 });
 
+// TEST MODE: fromMe filter removed temporarily
 async function procesarMensaje(msg) {
   console.log('>>> EVENTO from:', msg.from, '| fromMe:', msg.fromMe, '| body:', msg.body ? msg.body.substring(0, 50) : '(vacio)');
   if (msg.from === 'status@broadcast') return;
-  if (msg.fromMe) return;
+  // fromMe filter removed for testing - put back after test
   if (msg.from.endsWith('@g.us')) return;
   if (!msg.body || !msg.body.trim()) return;
 
@@ -151,7 +151,7 @@ async function procesarMensaje(msg) {
   }
 }
 
-client.on('message', procesarMensaje);
+// Only message_create to catch self-sent messages for testing
 client.on('message_create', procesarMensaje);
 
 client.initialize();
