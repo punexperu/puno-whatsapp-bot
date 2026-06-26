@@ -1,6 +1,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const Anthropic = require('@anthropic-ai/sdk');
+const http = require('http');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -36,12 +38,71 @@ REGLAS:
 
 const historial = {};
 const esNuevoUsuario = {};
+let currentQR = null;
 
-// Detectar executable de Chromium para Railway/Linux
+// Servidor HTTP para mostrar el QR como imagen escaneable
+const PORT = process.env.PORT || 3000;
+const server = http.createServer(async (req, res) => {
+  if (req.url === '/qr') {
+    if (currentQR) {
+      try {
+        const qrDataURL = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PUNO - Escanea el QR</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+    img { max-width: 300px; border: 10px solid white; border-radius: 8px; }
+    h2 { color: #128C7E; }
+    p { color: #555; }
+  </style>
+  <meta http-equiv="refresh" content="30">
+</head>
+<body>
+  <h2>📱 PUNO WhatsApp Bot</h2>
+  <p>Escanea este QR con WhatsApp Business → Dispositivos vinculados → Vincular dispositivo</p>
+  <img src="${qrDataURL}" alt="QR Code">
+  <p><small>Esta página se actualiza automáticamente cada 30 segundos</small></p>
+</body>
+</html>`);
+      } catch (err) {
+        res.writeHead(500);
+        res.end('Error generando QR: ' + err.message);
+      }
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PUNO - Cargando...</title>
+  <meta http-equiv="refresh" content="5">
+  <style>body { font-family: sans-serif; text-align: center; padding: 40px; }</style>
+</head>
+<body>
+  <h2>⏳ PUNO está iniciando...</h2>
+  <p>El QR aparecerá aquí en unos segundos. Esta página se actualiza sola.</p>
+</body>
+</html>`);
+    }
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<h1>PUNO Bot activo ✅</h1><p><a href="/qr">Ver QR de WhatsApp</a></p>');
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`\n🌐 Servidor QR en puerto ${PORT} — visita /qr para escanear\n`);
+});
+
+// Chromium para Railway
 const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH
-  || '/root/.nix-profile/bin/chromium'
-  || '/usr/bin/chromium-browser'
-  || '/usr/bin/chromium';
+  || '/root/.nix-profile/bin/chromium';
 
 const client = new Client({
   authStrategy: new LocalAuth(),
@@ -56,26 +117,25 @@ const client = new Client({
       '--no-zygote',
       '--single-process',
       '--disable-gpu',
-      '--disable-extensions',
-      '--disable-background-networking'
+      '--disable-extensions'
     ],
     headless: true
   }
 });
 
 client.on('qr', qr => {
-  console.log('\n📱 Escanea este QR con WhatsApp Business:\n');
+  currentQR = qr;
+  console.log('\n📱 QR generado. Abre /qr en el navegador para escanearlo.\n');
   qrcode.generate(qr, { small: true });
-  console.log('\n⏳ El QR expira en ~60 segundos. Escanea rápido.\n');
 });
 
 client.on('ready', () => {
+  currentQR = null;
   console.log('\n✅ PUNO está activo y escuchando en WhatsApp\n');
 });
 
 client.on('auth_failure', msg => {
   console.error('❌ Autenticación fallida:', msg);
-  console.log('💡 Borra la carpeta .wwebjs_auth y reinicia para generar nuevo QR');
 });
 
 client.on('disconnected', reason => {
@@ -101,7 +161,6 @@ client.on('message', async msg => {
     const bienvenida = '¡Hola! Soy PUNO, asistente de PUNEX GROUP. Conectamos compradores internacionales con proveedores peruanos. ¿Busca importar producto peruano o quiere conectar con compradores para exportar?';
     await msg.reply(bienvenida);
     historial[sender].push({ role: 'assistant', content: bienvenida });
-    console.log(`👋 Bienvenida enviada a ${sender}`);
     return;
   }
 
@@ -118,16 +177,12 @@ client.on('message', async msg => {
     const respuesta = response.content[0].text.trim();
     historial[sender].push({ role: 'assistant', content: respuesta });
     await msg.reply(respuesta);
-    console.log(`✅ Respuesta: ${respuesta.substring(0, 80)}...`);
+    console.log(`✅ Respuesta enviada a ${sender}`);
   } catch (err) {
     console.error('❌ Error API:', err.message);
-    try {
-      await msg.reply('Hubo un problema técnico. Intenta de nuevo en un momento.');
-    } catch (sendErr) {
-      console.error('❌ No se pudo enviar mensaje de error:', sendErr.message);
-    }
+    try { await msg.reply('Hubo un problema técnico. Intenta de nuevo.'); } catch (_) {}
   }
 });
 
-console.log('🚀 Iniciando PUNO... Chromium en:', chromiumPath);
+console.log('🚀 Iniciando PUNO...');
 client.initialize();
