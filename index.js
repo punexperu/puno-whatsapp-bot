@@ -14,59 +14,73 @@ process.on('unhandledRejection', reason => {
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const BIENVENIDA = `Hola, soy PUNO, asistente de PUNEX GROUP. ð
+const BIENVENIDA = `Hola, soy PUNO, asistente de PUNEX GROUP. 👋
 Ayudamos a empresas de todo el mundo a encontrar y adquirir exportaciones peruanas de calidad verificada, gestionando todo el proceso desde el origen.
-Â¿En quÃ© puedo ayudarle hoy?`;
+¿En qué puedo ayudarle hoy?`;
 
-const SYSTEM_PROMPT = `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, PerÃº.
+const SYSTEM_PROMPT = `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, Perú.
 Ayudamos a empresas de todo el mundo a encontrar y adquirir exportaciones peruanas de calidad verificada, gestionando todo el proceso desde el origen.
 
-TONO: CÃ¡lido, cercano y profesional. MÃ¡ximo 3-4 lÃ­neas por mensaje. Usa algÃºn emoji ocasional (no excesivo). Una sola pregunta por mensaje. Natural, como una persona real.
+TONO: Cálido, cercano y profesional. Máximo 3-4 líneas por mensaje. Usa algún emoji ocasional (no excesivo). Una sola pregunta por mensaje. Natural, como una persona real.
 
-EXPORTACIONES PRINCIPALES: jengibre, cÃºrcuma, vainilla, cacao, cafÃ©, superalimentos, textiles peruanos.
+EXPORTACIONES PRINCIPALES: jengibre, cúrcuma, vainilla, cacao, café, superalimentos, textiles peruanos.
 
 FLUJO PARA COMPRADORES:
-1. QuÃ© exportaciÃ³n peruana busca
+1. Qué exportación peruana busca
 2. Volumen aproximado
-3. PaÃ­s de destino
+3. País de destino
 4. Nombre y empresa
-5. Si ha importado antes desde PerÃº
-6. Certificaciones requeridas (orgÃ¡nico, Global GAP, etc.)
-Al terminar: "Perfecto, le paso estos datos a un agente PUNEX y les contacta directo. ð¤"
+5. Si ha importado antes desde Perú
+6. Certificaciones requeridas (orgánico, Global GAP, etc.)
+Al terminar: "Perfecto, le paso estos datos a un agente PUNEX y les contacta directo. 🤝"
 
 FLUJO PARA PROVEEDORES/EXPORTADORES:
-1. QuÃ© producto/variedad ofrece
+1. Qué producto/variedad ofrece
 2. Volumen disponible
 3. Mercados objetivo
-4. Nombre, empresa y ubicaciÃ³n
+4. Nombre, empresa y ubicación
 5. Certificaciones que posee
-Al terminar: "Bien, un agente PUNEX les contacta para ver si hacemos match con compradores actuales. ð¤"
+Al terminar: "Bien, un agente PUNEX les contacta para ver si hacemos match con compradores actuales. 🤝"
 
 SOBRE PUNEX GROUP:
-- Empresa de Lima, PerÃº
+- Empresa de Lima, Perú
 - Conectamos compradores internacionales con proveedores peruanos verificados
-- Gestionamos todo el proceso: sourcing, negociaciÃ³n, logÃ­stica y documentaciÃ³n
-- Trabajamos con jengibre, cÃºrcuma, vainilla, cacao, cafÃ©, superalimentos y textiles
+- Gestionamos todo el proceso: sourcing, negociación, logística y documentación
+- Trabajamos con jengibre, cúrcuma, vainilla, cacao, café, superalimentos y textiles
 
 REGLAS:
 - Nunca inventes precios
-- Si preguntan precio, di que depende del volumen y se detallarÃ¡ en propuesta formal
-- Responde en espaÃ±ol por defecto, en inglÃ©s si el cliente escribe en inglÃ©s
+- Si preguntan precio, di que depende del volumen y se detallará en propuesta formal
+- Responde en español por defecto, en inglés si el cliente escribe en inglés
 - Responde SOLO el mensaje de WhatsApp, sin explicaciones extra
-- Si no sabes algo especÃ­fico sobre PUNEX, di que un agente PUNEX les darÃ¡ los detalles`;
+- Si no sabes algo específico sobre PUNEX, di que un agente PUNEX les dará los detalles`;
 
 const historial = {};
-const pausados = new Set(); // contactos donde MartÃ­n toma el control manual
+const pausados = new Set(); // contactos donde Martín toma el control manual
 let currentQR = null;
 let botReady = false;
 
 
 const lidToJid = {}; // mapa @lid -> @s.whatsapp.net para fix entrega multi-device
+const phoneByName = {}; // fallback: nombre -> phone@s.whatsapp.net
 
 // Normaliza @lid eliminando sufijo de dispositivo (ej: 12345:0@lid -> 12345@lid)
 const normalizeLid = (jid) => {
   if (!jid || !jid.endsWith('@lid')) return jid;
   return jid.replace(/:[0-9]+@lid$/, '@lid');
+};
+
+// Registra un contacto phone+lid en ambos mapas
+const registrarContacto = (c) => {
+  if (c.id && c.id.endsWith('@s.whatsapp.net')) {
+    if (c.lid) {
+      const lid = normalizeLid(c.lid);
+      lidToJid[lid] = c.id;
+      console.log(`Mapeado: ${lid} -> ${c.id}`);
+    }
+    const nombre = c.name || c.notify || c.verifiedName;
+    if (nombre) phoneByName[nombre] = c.id;
+  }
 };
 
 const PORT = process.env.PORT || 3000;
@@ -121,33 +135,48 @@ async function connectToWhatsApp() {
   // Rastrear contactos para resolver @lid -> @s.whatsapp.net (fix WhatsApp multi-device)
   sock.ev.on('contacts.upsert', (contacts) => {
     console.log(`contacts.upsert: ${contacts.length} contactos`);
-    contacts.slice(0, 3).forEach((c, i) => {
+    contacts.slice(0, 20).forEach((c, i) => {
       console.log(`  c[${i}]: ${JSON.stringify(c).substring(0, 200)}`);
     });
     for (const c of contacts) {
-      // Caso A: contacto guardado con phone JID + lid
-      if (c.id && c.id.endsWith('@s.whatsapp.net') && c.lid) {
-        const lid = normalizeLid(c.lid);
-        lidToJid[lid] = c.id;
-        console.log(`Mapeado: ${lid} -> ${c.id}`);
-      }
-      // Caso B: contacto cuyo id ES el @lid
+      registrarContacto(c);
       if (c.id && c.id.endsWith('@lid')) {
         const lid = normalizeLid(c.id);
-        console.log(`@lid detectado: ${lid} | nombre: ${c.name || c.notify || '?'}`);
+        const nombre = c.name || c.notify || c.verifiedName || '?';
+        console.log(`@lid detectado: ${lid} | nombre: ${nombre}`);
       }
     }
-    console.log(`lidToJid: ${Object.keys(lidToJid).length} entradas`);
+    console.log(`lidToJid: ${Object.keys(lidToJid).length} | phoneByName: ${Object.keys(phoneByName).length}`);
   });
+
+  // messaging-history.set: sync completo de Baileys 6.7
+  sock.ev.on('messaging-history.set', ({ chats = [], contacts: histContacts = [], messages = [], isLatest }) => {
+    console.log(`messaging-history.set: ${histContacts.length} contactos, ${chats.length} chats, isLatest=${isLatest}`);
+    histContacts.slice(0, 10).forEach((c, i) => {
+      console.log(`  hist[${i}]: ${JSON.stringify(c).substring(0, 200)}`);
+    });
+    for (const c of histContacts) {
+      registrarContacto(c);
+      if (c.id && c.id.endsWith('@lid')) {
+        const nombre = c.name || c.notify || c.verifiedName || '?';
+        console.log(`hist @lid: ${normalizeLid(c.id)} | nombre: ${nombre}`);
+      }
+    }
+    for (const chat of chats) {
+      if (chat.id && !chat.id.endsWith('@g.us') && !chat.id.endsWith('@lid') && chat.lid) {
+        const lid = normalizeLid(chat.lid);
+        lidToJid[lid] = chat.id;
+        console.log(`Hist chat mapeado: ${lid} -> ${chat.id}`);
+      }
+    }
+    console.log(`lidToJid tras hist: ${Object.keys(lidToJid).length} | phoneByName: ${Object.keys(phoneByName).length}`);
+  });
+
   sock.ev.on('contacts.update', (updates) => {
     console.log(`contacts.update: ${updates.length}`);
     for (const u of updates) {
       console.log(`  upd: ${JSON.stringify(u).substring(0, 200)}`);
-      if (u.id && u.id.endsWith('@s.whatsapp.net') && u.lid) {
-        const lid = normalizeLid(u.lid);
-        lidToJid[lid] = u.id;
-        console.log(`Actualizado: ${lid} -> ${u.id}`);
-      }
+      registrarContacto(u);
     }
   });
   // Fuente adicional de mapeos: objetos de chat
@@ -212,7 +241,7 @@ async function connectToWhatsApp() {
 
       const texto = body.trim().toLowerCase();
 
-      // Control manual de MartÃ­n: #pausa para tomar el control, #activar para ceder al bot
+      // Control manual de Martín: #pausa para tomar el control, #activar para ceder al bot
       if (fromMe) {
         if (texto === '#pausa') {
           pausados.add(jid);
@@ -232,13 +261,22 @@ async function connectToWhatsApp() {
       // Resolver @lid a @s.whatsapp.net para que las respuestas lleguen correctamente
       const normalSender = normalizeLid(sender);
       let sendJid = normalSender;
+      const pushName = msg.pushName || '';
+      console.log(`MSG key: ${JSON.stringify(msg.key)} | pushName: "${pushName}"`);
+
       if (normalSender.endsWith('@lid')) {
         if (lidToJid[normalSender]) {
           sendJid = lidToJid[normalSender];
-          console.log(`@lid resuelto: ${normalSender} -> ${sendJid}`);
+          console.log(`@lid resuelto (mapa): ${normalSender} -> ${sendJid}`);
+        } else if (pushName && phoneByName[pushName]) {
+          // Fallback: buscar por nombre de push
+          sendJid = phoneByName[pushName];
+          lidToJid[normalSender] = sendJid; // cachear para futuras respuestas
+          console.log(`@lid resuelto (nombre "${pushName}"): ${normalSender} -> ${sendJid}`);
         } else {
-          console.log(`WARN @lid sin resolver: ${normalSender} | map tiene ${Object.keys(lidToJid).length} entradas`);
-          // Fallback: enviamos al @lid directo (Baileys intentarÃ¡ enrutar)
+          // Sin resolucion: listar nombres conocidos para diagnostico
+          const nombresConocidos = Object.keys(phoneByName).slice(0, 10).join(', ');
+          console.log(`WARN @lid sin resolver: ${normalSender} | lidToJid=${Object.keys(lidToJid).length} | phoneByName="${pushName}"=[${nombresConocidos}]`);
         }
       }
 
@@ -275,8 +313,8 @@ async function connectToWhatsApp() {
         console.log('Respuesta enviada a ' + sendJid + ': ' + respuesta.substring(0, 60));
       } catch (err) {
         console.error('Error al responder a ' + sender + ':', err.message);
-        // Fallback obligatorio cuando Groq o el envÃ­o fallan
-        const fallback = 'Gracias por escribir a PUNEX GROUP. Hemos recibido tu mensaje. Un responsable revisarÃ¡ tu consulta y te responderÃ¡ en breve.';
+        // Fallback obligatorio cuando Groq o el envío fallan
+        const fallback = 'Gracias por escribir a PUNEX GROUP. Hemos recibido tu mensaje. Un responsable revisará tu consulta y te responderá en breve.';
         try {
           await sock.sendMessage(sendJid, { text: fallback }, { quoted: msg });
           console.log('Fallback enviado a ' + sendJid);
