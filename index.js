@@ -1,4 +1,4 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, makeInMemoryStore } = require('@whiskeysockets/baileys');
 const Groq = require('groq-sdk');
 const http = require('http');
 const qrcode = require('qrcode-terminal');
@@ -32,7 +32,7 @@ FLUJO PARA COMPRADORES:
 4. Nombre y empresa
 5. Si ha importado antes desde Perú
 6. Certificaciones requeridas (orgánico, Global GAP, etc.)
-Al terminar: "Perfecto, le paso estos datos a un agente PUNEX y les contacta directo. 🤝"
+Al terminar: Perfecto, le paso estos datos a un agente PUNEX y les contacta directo.
 
 FLUJO PARA PROVEEDORES/EXPORTADORES:
 1. Qué producto/variedad ofrece
@@ -40,7 +40,7 @@ FLUJO PARA PROVEEDORES/EXPORTADORES:
 3. Mercados objetivo
 4. Nombre, empresa y ubicación
 5. Certificaciones que posee
-Al terminar: "Bien, un agente PUNEX les contacta para ver si hacemos match con compradores actuales. 🤝"
+Al terminar: Bien, un agente PUNEX les contacta para ver si hacemos match con compradores actuales.
 
 SOBRE PUNEX GROUP:
 - Empresa de Lima, Perú
@@ -56,9 +56,11 @@ REGLAS:
 - Si no sabes algo específico sobre PUNEX, di que un agente PUNEX les dará los detalles`;
 
 const historial = {};
-const pausados = new Set(); // contactos donde Martín toma el control
+const pausados = new Set();
 let currentQR = null;
 let botReady = false;
+
+const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
@@ -109,22 +111,21 @@ async function connectToWhatsApp() {
     getMessage: async () => undefined
   });
 
+  store.bind(sock.ev);
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
     if (qr) {
       currentQR = qr;
       botReady = false;
       console.log('QR generado - abre /qr en el navegador para escanearlo');
       qrcode.generate(qr, { small: true });
     }
-
     if (connection === 'open') {
       currentQR = null;
       botReady = true;
       console.log('PUNO activo y conectado a WhatsApp');
     }
-
     if (connection === 'close') {
       botReady = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -143,7 +144,6 @@ async function connectToWhatsApp() {
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
-
     for (const msg of messages) {
       const jid = msg.key.remoteJid || '';
       const fromMe = msg.key.fromMe;
@@ -152,46 +152,50 @@ async function connectToWhatsApp() {
         || msg.message?.imageMessage?.caption
         || '';
 
-      console.log('>>> EVENTO from:', jid, '| fromMe:', fromMe, '| body:', body.substring(0, 50));
-
       if (jid === 'status@broadcast') continue;
       if (jid.endsWith('@g.us')) continue;
       if (!body.trim()) continue;
 
       const texto = body.trim().toLowerCase();
 
-      // Martín escribe #pausa o #activar para controlar el bot
       if (fromMe) {
         if (texto === '#pausa') {
           pausados.add(jid);
-          console.log('BOT PAUSADO para ' + jid);
+          console.log('Pausa activada para ' + jid);
         } else if (texto === '#activar') {
           pausados.delete(jid);
-          console.log('BOT ACTIVADO para ' + jid);
+          console.log('Bot reactivado para ' + jid);
         }
-        continue; // nunca procesar mensajes propios de Martín
-      }
-
-      // Si este contacto está pausado, Martín lleva la conversación
-      if (pausados.has(jid)) {
-        console.log('Contacto pausado, ignorando: ' + jid);
         continue;
       }
 
+      if (pausados.has(jid)) continue;
+
       const sender = jid;
       const textoOriginal = body.trim();
-      console.log('Procesando de ' + sender + ': ' + textoOriginal.substring(0, 80));
+
+      let sendJid = sender;
+      if (sender.endsWith('@lid')) {
+        const contacts = store.contacts || {};
+        const phoneEntry = Object.entries(contacts).find(([k, v]) =>
+          k.endsWith('@s.whatsapp.net') && (v.lid === sender || v.id === sender)
+        );
+        if (phoneEntry) {
+          sendJid = phoneEntry[0];
+          console.log('Resolviendo @lid -> ' + sendJid);
+        }
+      }
+
+      console.log('>>> MSG de ' + sender + ' | enviar a: ' + sendJid + ' | texto: ' + textoOriginal.substring(0, 50));
 
       if (!historial[sender]) historial[sender] = [];
 
       try {
-        // Primer contacto: enviar mensaje de bienvenida fijo
         if (historial[sender].length === 0) {
-          await sock.sendMessage(sender, { text: BIENVENIDA });
+          await sock.sendMessage(sendJid, { text: BIENVENIDA }, { quoted: msg });
           historial[sender].push({ role: 'assistant', content: BIENVENIDA });
-          console.log('Bienvenida enviada a ' + sender);
+          console.log('Bienvenida enviada a ' + sendJid);
         }
-
         const response = await groq.chat.completions.create({
           model: 'llama-3.3-70b-versatile',
           messages: [
@@ -201,17 +205,14 @@ async function connectToWhatsApp() {
           ],
           max_tokens: 350
         });
-
         const respuesta = response.choices[0].message.content.trim();
-
         historial[sender].push(
           { role: 'user', content: textoOriginal },
           { role: 'assistant', content: respuesta }
         );
         if (historial[sender].length > 20) historial[sender] = historial[sender].slice(-20);
-
-        await sock.sendMessage(sender, { text: respuesta });
-        console.log('Respuesta enviada a ' + sender + ': ' + respuesta.substring(0, 60));
+        await sock.sendMessage(sendJid, { text: respuesta }, { quoted: msg });
+        console.log('Respuesta enviada a ' + sendJid + ': ' + respuesta.substring(0, 60));
       } catch (err) {
         console.error('Error al responder a ' + sender + ':', err.message);
       }
