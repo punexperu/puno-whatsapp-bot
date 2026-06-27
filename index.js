@@ -1,5 +1,5 @@
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const http = require('http');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -12,10 +12,9 @@ process.on('unhandledRejection', reason => {
   console.error('WARN unhandledRejection:', reason);
 });
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: 'gemini-1.5-flash',
-  systemInstruction: `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, Peru.
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const SYSTEM_PROMPT = `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, Peru.
 Conectamos compradores internacionales con proveedores peruanos verificados.
 
 TONO: Profesional, directo, calido. Maximo 3-4 lineas por mensaje. Sin emojis excesivos. Una sola pregunta por mensaje.
@@ -41,8 +40,7 @@ REGLAS:
 - Nunca inventes precios
 - Si preguntan precio, di que depende del volumen y se detallara en propuesta formal
 - Responde en espanol por defecto, en ingles si el cliente escribe en ingles
-- Responde SOLO el mensaje de WhatsApp, sin explicaciones extra`
-});
+- Responde SOLO el mensaje de WhatsApp, sin explicaciones extra`;
 
 const historial = {};
 let currentQR = null;
@@ -154,17 +152,21 @@ async function connectToWhatsApp() {
       if (!historial[sender]) historial[sender] = [];
 
       try {
-        const chat = model.startChat({
-          history: historial[sender],
-          generationConfig: { maxOutputTokens: 350 }
+        const response = await groq.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            ...historial[sender],
+            { role: 'user', content: texto }
+          ],
+          max_tokens: 350
         });
 
-        const result = await chat.sendMessage(texto);
-        const respuesta = result.response.text().trim();
+        const respuesta = response.choices[0].message.content.trim();
 
         historial[sender].push(
-          { role: 'user', parts: [{ text: texto }] },
-          { role: 'model', parts: [{ text: respuesta }] }
+          { role: 'user', content: texto },
+          { role: 'assistant', content: respuesta }
         );
         if (historial[sender].length > 20) historial[sender] = historial[sender].slice(-20);
 
