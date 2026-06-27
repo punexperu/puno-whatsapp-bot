@@ -56,6 +56,7 @@ REGLAS:
 - Si no sabes algo específico sobre PUNEX, di que Martín les dará los detalles`;
 
 const historial = {};
+const pausados = new Set(); // contactos donde Martín toma el control
 let currentQR = null;
 let botReady = false;
 
@@ -155,16 +156,36 @@ async function connectToWhatsApp() {
 
       if (jid === 'status@broadcast') continue;
       if (jid.endsWith('@g.us')) continue;
-      if (fromMe) continue;
       if (!body.trim()) continue;
 
+      const texto = body.trim().toLowerCase();
+
+      // Martín escribe #pausa o #activar para controlar el bot
+      if (fromMe) {
+        if (texto === '#pausa') {
+          pausados.add(jid);
+          console.log('BOT PAUSADO para ' + jid);
+        } else if (texto === '#activar') {
+          pausados.delete(jid);
+          console.log('BOT ACTIVADO para ' + jid);
+        }
+        continue; // nunca procesar mensajes propios de Martín
+      }
+
+      // Si este contacto está pausado, Martín lleva la conversación
+      if (pausados.has(jid)) {
+        console.log('Contacto pausado, ignorando: ' + jid);
+        continue;
+      }
+
       const sender = jid;
-      const texto = body.trim();
-      console.log('Procesando de ' + sender + ': ' + texto.substring(0, 80));
+      const textoOriginal = body.trim();
+      console.log('Procesando de ' + sender + ': ' + textoOriginal.substring(0, 80));
 
       if (!historial[sender]) historial[sender] = [];
 
       try {
+        // Primer contacto: enviar mensaje de bienvenida fijo
         if (historial[sender].length === 0) {
           await sock.sendMessage(sender, { text: BIENVENIDA });
           historial[sender].push({ role: 'assistant', content: BIENVENIDA });
@@ -176,7 +197,7 @@ async function connectToWhatsApp() {
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             ...historial[sender],
-            { role: 'user', content: texto }
+            { role: 'user', content: textoOriginal }
           ],
           max_tokens: 350
         });
@@ -184,7 +205,7 @@ async function connectToWhatsApp() {
         const respuesta = response.choices[0].message.content.trim();
 
         historial[sender].push(
-          { role: 'user', content: texto },
+          { role: 'user', content: textoOriginal },
           { role: 'assistant', content: respuesta }
         );
         if (historial[sender].length > 20) historial[sender] = historial[sender].slice(-20);
