@@ -1,5 +1,5 @@
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const http = require('http');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -12,9 +12,10 @@ process.on('unhandledRejection', reason => {
   console.error('WARN unhandledRejection:', reason);
 });
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const SYSTEM_PROMPT = `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, Peru.
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({
+  model: 'gemini-1.5-flash',
+  systemInstruction: `Eres PUNO, asistente comercial de PUNEX GROUP S.A.C., empresa de Lima, Peru.
 Conectamos compradores internacionales con proveedores peruanos verificados.
 
 TONO: Profesional, directo, calido. Maximo 3-4 lineas por mensaje. Sin emojis excesivos. Una sola pregunta por mensaje.
@@ -40,7 +41,8 @@ REGLAS:
 - Nunca inventes precios
 - Si preguntan precio, di que depende del volumen y se detallara en propuesta formal
 - Responde en espanol por defecto, en ingles si el cliente escribe en ingles
-- Responde SOLO el mensaje de WhatsApp, sin explicaciones extra`;
+- Responde SOLO el mensaje de WhatsApp, sin explicaciones extra`
+});
 
 const historial = {};
 let currentQR = null;
@@ -150,18 +152,21 @@ async function connectToWhatsApp() {
       console.log('Procesando de ' + sender + ': ' + texto.substring(0, 80));
 
       if (!historial[sender]) historial[sender] = [];
-      historial[sender].push({ role: 'user', content: texto });
-      if (historial[sender].length > 10) historial[sender] = historial[sender].slice(-10);
 
       try {
-        const response = await anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 350,
-          system: SYSTEM_PROMPT,
-          messages: historial[sender]
+        const chat = model.startChat({
+          history: historial[sender],
+          generationConfig: { maxOutputTokens: 350 }
         });
-        const respuesta = response.content[0].text.trim();
-        historial[sender].push({ role: 'assistant', content: respuesta });
+
+        const result = await chat.sendMessage(texto);
+        const respuesta = result.response.text().trim();
+
+        historial[sender].push(
+          { role: 'user', parts: [{ text: texto }] },
+          { role: 'model', parts: [{ text: respuesta }] }
+        );
+        if (historial[sender].length > 20) historial[sender] = historial[sender].slice(-20);
 
         await sock.sendMessage(sender, { text: respuesta });
         console.log('Respuesta enviada a ' + sender + ': ' + respuesta.substring(0, 60));
