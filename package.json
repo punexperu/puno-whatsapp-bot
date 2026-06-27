@@ -7,7 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.24.0",
+    "@google/generative-ai": "^0.21.0",
     "@whiskeysockets/baileys": "^6.7.0",
     "pino": "^8.0.0",
     "qrcode": "^1.5.3",
