@@ -32,7 +32,7 @@ FLUJO PARA COMPRADORES:
 4. Nombre y empresa
 5. Si ha importado antes desde Perú
 6. Certificaciones requeridas (orgánico, Global GAP, etc.)
-Al terminar: "Perfecto, le paso estos datos a Martín y les contacta directo. 🤝"
+Al terminar: "Perfecto, le paso estos datos a un agente PUNEX y les contacta directo. 🤝"
 
 FLUJO PARA PROVEEDORES/EXPORTADORES:
 1. Qué producto/variedad ofrece
@@ -40,7 +40,7 @@ FLUJO PARA PROVEEDORES/EXPORTADORES:
 3. Mercados objetivo
 4. Nombre, empresa y ubicación
 5. Certificaciones que posee
-Al terminar: "Bien, Martín les contacta para ver si hacemos match con compradores actuales. 🤝"
+Al terminar: "Bien, un agente PUNEX les contacta para ver si hacemos match con compradores actuales. 🤝"
 
 SOBRE PUNEX GROUP:
 - Empresa de Lima, Perú
@@ -53,7 +53,7 @@ REGLAS:
 - Si preguntan precio, di que depende del volumen y se detallará en propuesta formal
 - Responde en español por defecto, en inglés si el cliente escribe en inglés
 - Responde SOLO el mensaje de WhatsApp, sin explicaciones extra
-- Si no sabes algo específico sobre PUNEX, di que Martín les dará los detalles`;
+- Si no sabes algo específico sobre PUNEX, di que un agente PUNEX les dará los detalles`;
 
 const historial = {};
 const pausados = new Set(); // contactos donde Martín toma el control
