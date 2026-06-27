@@ -57,9 +57,16 @@ REGLAS:
 
 const historial = {};
 const pausados = new Set(); // contactos donde Martín toma el control manual
-const lidToJid = {}; // mapa @lid -> @s.whatsapp.net para fix entrega multi-device
 let currentQR = null;
 let botReady = false;
+
+const lidToJid = {}; // mapa @lid -> @s.whatsapp.net para fix entrega multi-device
+
+// Normaliza @lid eliminando sufijo de dispositivo (ej: 12345:0@lid -> 12345@lid)
+const normalizeLid = (jid) => {
+  if (!jid || !jid.endsWith('@lid')) return jid;
+  return jid.replace(/:[d]+@lid$/, '@lid');
+};
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
@@ -113,16 +120,34 @@ async function connectToWhatsApp() {
   // Rastrear contactos para resolver @lid -> @s.whatsapp.net (fix WhatsApp multi-device)
   sock.ev.on('contacts.upsert', (contacts) => {
     for (const c of contacts) {
-      if (c.id && c.lid) {
-        lidToJid[c.lid] = c.id;
-        console.log(`Contacto mapeado: ${c.lid} -> ${c.id}`);
+      // Caso A: contacto guardado con phone JID + lid (sync inicial)
+      if (c.id && c.id.endsWith('@s.whatsapp.net') && c.lid) {
+        const lid = normalizeLid(c.lid);
+        lidToJid[lid] = c.id;
+        console.log(`Contacto mapeado: ${lid} -> ${c.id}`);
+      }
+      // Caso B: contacto cuyo id ES el @lid (contacto no guardado)
+      if (c.id && c.id.endsWith('@lid')) {
+        const lid = normalizeLid(c.id);
+        console.log(`Contacto @lid detectado: ${lid} | nombre: ${c.name || c.notify || 'desconocido'}`);
       }
     }
   });
   sock.ev.on('contacts.update', (updates) => {
     for (const u of updates) {
-      if (u.id && u.lid) {
-        lidToJid[u.lid] = u.id;
+      if (u.id && u.id.endsWith('@s.whatsapp.net') && u.lid) {
+        const lid = normalizeLid(u.lid);
+        lidToJid[lid] = u.id;
+      }
+    }
+  });
+  // Fuente adicional de mapeos: objetos de chat
+  sock.ev.on('chats.upsert', (chats) => {
+    for (const chat of chats) {
+      if (chat.id && !chat.id.endsWith('@g.us') && !chat.id.endsWith('@lid') && chat.lid) {
+        const lid = normalizeLid(chat.lid);
+        lidToJid[lid] = chat.id;
+        console.log(`Chat mapeado: ${lid} -> ${chat.id}`);
       }
     }
   });
@@ -176,7 +201,7 @@ async function connectToWhatsApp() {
 
       const texto = body.trim().toLowerCase();
 
-      // Control manual: #pausa para tomar el control, #activar para ceder al bot
+      // Control manual de Martín: #pausa para tomar el control, #activar para ceder al bot
       if (fromMe) {
         if (texto === '#pausa') {
           pausados.add(jid);
@@ -193,11 +218,17 @@ async function connectToWhatsApp() {
       const sender = jid;
       const textoOriginal = body.trim();
 
-      // Resolver @lid a @s.whatsapp.net si tenemos el mapeo
-      let sendJid = sender;
-      if (sender.endsWith('@lid') && lidToJid[sender]) {
-        sendJid = lidToJid[sender];
-        console.log(`Resolviendo @lid -> ${sendJid}`);
+      // Resolver @lid a @s.whatsapp.net para que las respuestas lleguen correctamente
+      const normalSender = normalizeLid(sender);
+      let sendJid = normalSender;
+      if (normalSender.endsWith('@lid')) {
+        if (lidToJid[normalSender]) {
+          sendJid = lidToJid[normalSender];
+          console.log(`@lid resuelto: ${normalSender} -> ${sendJid}`);
+        } else {
+          console.log(`WARN @lid sin resolver: ${normalSender} | map tiene ${Object.keys(lidToJid).length} entradas`);
+          // Fallback: enviamos al @lid directo (Baileys intentará enrutar)
+        }
       }
 
       console.log(`>>> MSG de ${sender} | enviar a: ${sendJid} | texto: ${textoOriginal.substring(0, 50)}`);
@@ -233,6 +264,14 @@ async function connectToWhatsApp() {
         console.log('Respuesta enviada a ' + sendJid + ': ' + respuesta.substring(0, 60));
       } catch (err) {
         console.error('Error al responder a ' + sender + ':', err.message);
+        // Fallback obligatorio cuando Groq o el envío fallan
+        const fallback = 'Gracias por escribir a PUNEX GROUP. Hemos recibido tu mensaje. Un responsable revisará tu consulta y te responderá en breve.';
+        try {
+          await sock.sendMessage(sendJid, { text: fallback }, { quoted: msg });
+          console.log('Fallback enviado a ' + sendJid);
+        } catch (err2) {
+          console.error('Error al enviar fallback:', err2.message);
+        }
       }
     }
   });
