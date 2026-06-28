@@ -5,7 +5,7 @@ const {
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const Groq = require('groq-sdk');
-const http = require('http');
+const http = require('http')
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const pino = require('pino');
@@ -69,7 +69,7 @@ async function start() {
     printQRInTerminal: false,
     browser: ['PUNO Bot', 'Chrome', '1.0.0'],
     generateHighQualityLinkPreview: false,
-    syncFullHistory: true,
+    syncFullHistory: false,
     getMessage: async () => undefined
   });
 
