@@ -117,7 +117,7 @@ async function start() {
       botReady = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log('Conexion cerrada, codigo:', code);
-      if (code !== DisconnectReason.loggedOut) setTimeout(start, 5000);
+      if (code !== DisconnectReason.loggedOut && code !== DisconnectReason.connectionReplaced) setTimeout(start, 5000);
       else { currentQR = null; console.log('Sesion cerrada.'); }
     }
   });
@@ -147,10 +147,12 @@ async function start() {
       console.log('MSG: ' + jid + ' -> sendJid=' + sendJid + ' | "' + textoOriginal.substring(0, 40) + '"');
       if (sendJid.endsWith('@lid')) console.log('WARN @lid sin resolver | lidToJid=' + Object.keys(lidToJid).length);
 
-      if (!historial[jid]) historial[jid] = [];
+      try { sock.readMessages([msg.key]).catch(()=>{}); } catch(e) {}
+
+        if (!historial[jid]) historial[jid] = [];
       try {
         if (historial[jid].length === 0) {
-          await sock.sendMessage(sendJid, { text: BIENVENIDA }, { quoted: msg });
+          await sock.sendMessage(jid, { text: BIENVENIDA });
           historial[jid].push({ role: 'assistant', content: BIENVENIDA });
         }
         const resp = await groq.chat.completions.create({
@@ -161,7 +163,7 @@ async function start() {
         const respuesta = resp.choices[0].message.content.trim();
         historial[jid].push({ role: 'user', content: textoOriginal }, { role: 'assistant', content: respuesta });
         if (historial[jid].length > 20) historial[jid] = historial[jid].slice(-20);
-        await sock.sendMessage(sendJid, { text: respuesta }, { quoted: msg });
+        await sock.sendMessage(jid, { text: respuesta });
         console.log('OK -> ' + sendJid + ': ' + respuesta.substring(0, 50));
       } catch (err) {
         console.error('Error:', err.message);
