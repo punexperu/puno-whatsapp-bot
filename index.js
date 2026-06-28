@@ -181,3 +181,5 @@ try { await sock.sendMessage(resolvedJid, { text: 'Gracias por escribir a PUNEX 
 }
 
 start();
+
+// v2
