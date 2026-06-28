@@ -159,7 +159,7 @@ console.log('RESOLVED: ' + resolvedJid + ' | map=' + Object.keys(lidToJid).lengt
 if (!historial[jid]) historial[jid] = [];
 try {
 if (historial[jid].length === 0) {
-await sock.sendMessage(resolvedJid, { text: BIENVENIDA });
+await sock.sendMessage(resolvedJid, { text: BIENVENIDA }, { quoted: msg });
 historial[jid].push({ role: 'assistant', content: BIENVENIDA });
 }
 const resp = await groq.chat.completions.create({
@@ -170,11 +170,11 @@ max_tokens: 350
 const respuesta = resp.choices[0].message.content.trim();
 historial[jid].push({ role: 'user', content: textoOriginal }, { role: 'assistant', content: respuesta });
 if (historial[jid].length > 20) historial[jid] = historial[jid].slice(-20);
-await sock.sendMessage(resolvedJid, { text: respuesta });
+await sock.sendMessage(resolvedJid, { text: respuesta }, { quoted: msg });
 console.log('OK -> ' + resolvedJid + ': ' + respuesta.substring(0, 50));
 } catch (err) {
 console.error('Error:', err.message);
-try { await sock.sendMessage(resolvedJid, { text: 'Gracias por escribir a PUNEX GROUP. Un agente te responderá pronto.' }); } catch (e) {}
+try { await sock.sendMessage(resolvedJid, { text: 'Gracias por escribir a PUNEX GROUP. Un agente te responderá pronto.' }, { quoted: msg }); } catch (e) {}
 }
 }
 });
