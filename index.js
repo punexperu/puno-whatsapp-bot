@@ -69,7 +69,7 @@ logger: pino({ level: 'silent' }),
 printQRInTerminal: false,
 browser: ['PUNO Bot', 'Chrome', '1.0.0'],
 generateHighQualityLinkPreview: false,
-syncFullHistory: false,
+syncFullHistory: true,
 getMessage: async () => undefined
 });
 
