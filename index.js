@@ -270,27 +270,19 @@ async function start() {
         }
       }
 
-      const resolvedJid = resolveJid(jid);
-      console.log('MSG: ' + jid + ' -> resolved=' + resolvedJid + ' | "' + textoOriginal.substring(0, 40) + '"');
-
-      if (resolvedJid.endsWith('@lid')) {
-        console.log('WARN: @lid sin resolver | map=' + Object.keys(lidToJid).length + ' | JID=' + jid);
-      }
+      // En WhatsApp Multi-Device, las cuentas @lid deben recibirse y enviarse
+      // usando el mismo @lid — el servidor WA hace el enrutamiento internamente.
+      // Enviar a @s.whatsapp.net para una cuenta @lid resulta en silencio (ack sin entrega).
+      const finalJid = jid;
+      const resolvedPhone = resolveJid(jid); // solo para logging
+      console.log('MSG: ' + jid + ' -> finalJid=' + finalJid + ' (phone ref: ' + resolvedPhone + ') | "' + textoOriginal.substring(0, 40) + '"');
 
       try { sock.readMessages([msg.key]).catch(() => {}); } catch(e) {}
 
-      // Suscribirse a presencia para intentar resolver @lid
+      // Suscribirse a presencia ayuda a Baileys a establecer sesion Signal con el @lid
       if (jid.endsWith('@lid')) {
         try { await sock.presenceSubscribe(jid); } catch(_) {}
-        await new Promise(r => setTimeout(r, 500));
-        // Re-resolver tras presenceSubscribe
-        const reresolved = resolveJid(jid);
-        if (reresolved !== resolvedJid) {
-          console.log('MAP-AFTER-PRESENCE: ' + jid + ' -> ' + reresolved);
-        }
       }
-
-      const finalJid = resolveJid(jid);
 
       if (!historial[jid]) historial[jid] = [];
       try {
