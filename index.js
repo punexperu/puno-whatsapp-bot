@@ -201,6 +201,21 @@ async function start() {
   });
 
   sock.ev.on('creds.update', saveCreds);
+  // Confirmación real de entrega. sendMessage() puede devolver OK aunque
+  // WhatsApp rechace el mensaje después (por ejemplo, error 463).
+  sock.ev.on('messages.update', (updates) => {
+    for (const { key, update } of updates) {
+      if (!key?.fromMe || update?.status === undefined) continue;
+      const reason = update.messageStubParameters?.join(' | ') || '';
+      console.log(
+        'ACK: id=' + (key.id || '') +
+        ' jid=' + (key.remoteJid || '') +
+        ' status=' + update.status +
+        (reason ? ' reason=' + reason : '')
+      );
+    }
+  });
+
 
   // ── Mensajes ──
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
